@@ -18,6 +18,11 @@ sentencepiece>=0.2.0
 
 # Technical analysis (future step)
 ta>=0.11.0
+scipy>=1.13.0
+
+# Dashboard
+streamlit>=1.38.0
+plotly>=5.24.0
 
 # Utilities
 python-dotenv>=1.0.0
