@@ -11,9 +11,12 @@
 1. **抓股價**（`yfinance`）：歷史 OHLCV 資料。
 2. **抓新聞**：Yahoo Finance（即時，但只有最新 ~10 則、無歷史回溯）+ Alpha Vantage
    （`NEWS_SENTIMENT` API，可回溯歷史，但免費方案每天限 25 次請求）。
-3. **情緒分類模型**：以 `ProsusAI/finbert` 為起點，用 HuggingFace `transformers` 在
-   `zeroshot/twitter-financial-news-sentiment` 資料集上 fine-tune 一個 3 類（bearish / bullish /
-   neutral）情緒分類器，用來對新聞標題打分。
+3. **情緒分類模型**：以 `ProsusAI/finbert` 為起點，用 HuggingFace `transformers` 在完整的
+   `zeroshot/twitter-financial-news-sentiment` 資料集（train 9,543 / validation 2,388，全部用上，
+   沒有限制樣本數）上 fine-tune 一個 3 類（bearish / bullish / neutral）情緒分類器，額外把
+   `news_filters.is_routine_institutional_filing` 篩出的機構持股異動標題也標註為 neutral 加進訓練集
+   （避免模型被 Sells→bearish / Buys→bullish 這類表面詞彙誤導），6 epoch，訓練後在驗證集上跑混淆
+   矩陣評估，`eval_accuracy` 0.889，bearish/bullish 互判率 3.77%（詳見「已知限制」）。
 4. **技術分析**：用 `ta` 套件算 RSI、MACD、布林通道、SMA/EMA。
 5. **整合**：把每日的新聞情緒統計（平均看多/看空機率、net_sentiment）跟當天的技術指標合併成一份
    特徵表，再用簡單規則（情緒 + RSI 極端值同時出現）產生示範用買賣訊號，並計算訊號後 N 天的報酬率
@@ -140,9 +143,11 @@ stock-nlp-project/
 │       ├── {ticker}_indicators.csv
 │       ├── {ticker}_features.csv
 │       ├── {ticker}_signals.csv
-│       ├── {ticker}_news_from_AAPL_NVDA.csv       跨市場：美股新聞對齊到下一個台股交易日 + 情緒分類（{ticker} = 2330.TW/0050.TW/2317.TW/2454.TW）
+│       ├── {ticker}_news_from_AAPL_NVDA_AMD_TSM_QCOM.csv  跨市場：美股新聞對齊到下一個台股交易日 + 情緒分類（{ticker} = 2330.TW/0050.TW/2317.TW/2454.TW）
 │       ├── {ticker}_x_US_*.csv                    跨市場實驗用合成標籤（indicators/merged_sentiment/features/signals，內容跟同名的 {ticker}_* 檔案意義不同，見上方流程圖說明）
-│       └── {ticker}_x_US_correlation_history.csv  每支台股各自的相關係數歷史記錄，每次排程執行都會 append 一筆
+│       ├── {ticker}_x_US_correlation_history.csv  每支台股各自的相關係數歷史記錄，每次排程執行都會 append 一筆
+│       ├── insider_selling_news_AAPL.csv          內部人賣股新聞逐則明細 + 對齊後的 forward return（見下方「內部人賣股觀察分析」）
+│       └── insider_selling_daily_AAPL.csv         內部人賣股新聞依交易日聚合後的統計（不進 git，一次性分析輸出）
 ├── models/
 │   └── finbert-sentiment/final/   fine-tune 完成的情緒分類模型（HuggingFace 格式，含 tokenizer）
 ├── src/
@@ -158,22 +163,25 @@ stock-nlp-project/
 │   │   ├── indicators.py              計算 RSI/MACD/布林通道/均線
 │   │   ├── build_feature_table.py     技術指標 + 每日情緒統計合併
 │   │   ├── signals.py                 產生買賣訊號 + forward return 粗略回測
-│   │   └── correlation_analysis.py    情緒 vs. 隔天報酬率的相關係數（觀察用），append 進歷史記錄
+│   │   ├── correlation_analysis.py    情緒 vs. 隔天報酬率的相關係數（觀察用），append 進歷史記錄
+│   │   └── insider_selling_analysis.py  內部人賣股新聞 vs. 股價後續表現，純觀察分析（見下方章節）
 │   └── utils/
 │       ├── merge_price_news.py         新聞依日期對齊股價（同一支股票，merge_asof backward）
 │       ├── merge_cross_market_news.py  跨市場：美股新聞對齊到下一個台股交易日 + 情緒分類（實驗性）
-│       ├── news_filters.py             過濾例行機構持股異動公告的關鍵字規則
+│       ├── news_filters.py             過濾例行機構持股異動公告的規則 + 內部人賣股新聞辨識規則
 │       ├── prepare_crossmarket_adapter.py  把跨市場合併結果轉成 build_feature_table.py/signals.py 看得懂的格式
-│       └── telegram_notify.py          組每支股票的摘要，發一則訊息到 Telegram
+│       └── telegram_notify.py          組每支股票的摘要 + 健檢異常警告，發一則訊息到 Telegram
 ├── scripts/
-│   └── run_daily_pipeline.ps1     Windows 工作排程器每日執行用的包裝腳本（見下方「排程狀態」）
+│   └── run_daily_pipeline.ps1     Windows 工作排程器每日執行用的包裝腳本（見下方「排程狀態」與「健檢機制」）
 ├── app.py                          Streamlit 本機儀表板：`streamlit run app.py`
 ├── logs/
 │   ├── daily_pipeline.log             現行排程的執行紀錄（累加寫入）
+│   ├── last_run_status.json           最近一次排程執行的健檢結果（失敗步驟/資料未更新清單），不進 git
 │   └── fetch_news_alphavantage.log    舊版排程（只抓 AAPL）留下的歷史紀錄，現行排程不再寫入
 ├── requirements.txt                完整套件清單（含 ML fine-tune 用的 transformers/torch/datasets/accelerate）
 ├── requirements-base.txt           基本套件（資料抓取/處理/儀表板，不含 ML 套件）
-├── .env / .env.example             API key / Bot Token 等敏感設定（.env 不會進 git，.env.example 是範本）
+├── .env / .env.example             API key / Bot Token 等敏感設定（.env 不會進 git，.env.example 是範本，
+│                                    含 GITHUB_PAT，排程用來無人值守推送 data/processed 回 GitHub）
 └── .gitignore
 ```
 
@@ -184,14 +192,33 @@ stock-nlp-project/
    不具統計意義**，純粹是驗證程式邏輯正確（見程式輸出的提醒訊息）。免費方案每天限 25 次請求，
    要累積出真正夠長的歷史需要持續跑排程一段時間，或改用付費方案。
 
-2. **情緒分類模型是小樣本驗證版本**：目前的 fine-tune 是在
-   `zeroshot/twitter-financial-news-sentiment`（推文語氣）上訓練的，訓練集用了 9,543 筆、驗證集
-   2,388 筆，4 epoch（`eval_accuracy` ≈ 0.89）。這足以證明訓練流程正確、模型可用，但：
-   - 訓練資料是「推文」語氣，面對「正式新聞標題」（陳述事實、較少表態）時，模型會傾向判斷為
-     neutral，鑑別度較低。
+2. **情緒分類模型**：`train.py` 目前是正式訓練版本，用完整的
+   `zeroshot/twitter-financial-news-sentiment`（train 9,543 / validation 2,388，沒有限制樣本數）
+   + 351 則機構持股異動標題標註為 neutral 加碼，6 epoch。驗證集上的結果：
+
+   | 指標 | 數值 |
+   |---|---|
+   | Accuracy | 0.889 |
+   | F1 (weighted) | 0.889 |
+   | Bearish/Bullish 互判率 | 3.77%（822 筆 bearish/bullish 樣本中 31 筆互判） |
+
+   混淆矩陣（rows = 實際，columns = 預測）：
+
+   ```
+               bearish   bullish   neutral
+    bearish        283        12        52
+    bullish         19       390        66
+    neutral         59        57      1450
+   ```
+
+   互判率偏低，大部分錯誤是判成 neutral（訓練時故意用機構持股異動標題加碼想達成的效果）。仍然存在
+   的限制：
+   - 訓練資料是「推文」語氣，面對「正式新聞標題」（陳述事實、較少表態）時，模型仍會偏向判斷為
+     neutral，鑑別度較低——這是資料集本身「文體不同」的問題，不是樣本數不夠，加大樣本量/epoch
+     無法解決，需要換一個更貼近正式新聞語氣的訓練資料集才能真正改善。
    - 沒有針對特定產業/股票做領域微調。
-   - 沒有做嚴謹的 train/val/test 三方切分或交叉驗證，`eval_accuracy` 只能當參考，不是嚴謹的
-     模型評估結果。
+   - 只有 train/validation 兩方切分，沒有獨立的 held-out test set 或交叉驗證，上面的數字只能當
+     參考，不是嚴謹的模型評估結果（用來調參/選模型的驗證集，拿來報告最終效能會偏樂觀）。
 
 3. **進場時機用「收盤價」，不是即時價格**：`indicators.py` 算的 RSI/MACD 等都是用當天**收盤後**的
    資料，`signals.py` 的 `forward_return` 也是用「訊號當天收盤價 → N 天後收盤價」計算報酬率。這代表
@@ -250,6 +277,46 @@ Unregister-ScheduledTask -TaskName "StockNLP_DailyPipeline" -Confirm:$false
 
 > 舊的排程 `StockNLP_FetchNewsAlphaVantage`（只抓 AAPL）已經移除、換成上面這個。
 
+## 健檢機制
+
+排程是無人值守背景執行，最初的設計裡 `run_daily_pipeline.ps1` 的 `Run-Step` 從來沒檢查過 python
+腳本的結束代碼——除了 `fetch_news_alphavantage.py` 自己有處理網路例外，其他腳本（`fetch_stock_price.py`、
+`merge_cross_market_news.py`、`indicators.py` 等）遇到網路斷線/上游檔案缺失都是直接丟未處理的例外，
+但沒人檢查結束代碼，整條排程照樣往下跑完、Task Scheduler 還是回報成功，等於**靜默失敗**。現在補上：
+
+1. **步驟失敗追蹤**：`Run-Step` 現在會檢查結束代碼，失敗就在 `logs\daily_pipeline.log` 標記
+   `!!! FAILED: ... !!!` 並累積清單。
+2. **資料新鮮度檢查**：就算某一步沒噴例外，也可能悄悄用了昨天的舊檔案（例如今天的
+   merge 沒真的重跑，下游步驟直接讀到舊 `signals.csv`，全部正常跑完但資料是舊的）。排程跑完後
+   會檢查每支台股的 `{ticker}_x_US_signals.csv` 是不是今天才寫入，不是就標記「可能是舊資料」。
+3. 上面兩項結果寫進 `logs\last_run_status.json`（不進 git），`telegram_notify.py` 讀取後，有異常
+   就在通知最前面加上 🔴 警告區塊，列出哪些步驟失敗、哪支股票資料沒更新。
+4. **順手修掉一個會讓健檢機制天天誤報的既有 bug**：`telegram_notify.py` 印訊息時因為 emoji 在
+   排程的 cp950 主控台編碼下會 crash（訊息其實有送出去，只是崩潰在送出「之後」的確認列印，log
+   裡會看到一段 `UnicodeEncodeError` traceback）。改成在 `run_daily_pipeline.ps1` 統一設定
+   `$env:PYTHONIOENCODING = "utf-8"`，所有透過 `Run-Step` 呼叫的 python 子行程都會繼承到。
+
+**殘留限制**：如果 `telegram_notify.py` 那一步本身因為網路問題送不出去，不會有任何 Telegram
+通知（因為 Telegram 本身就是那個壞掉的管道），這種情況只有 `logs\daily_pipeline.log` 看得到。
+要有真正的備援需要第二個通知管道（例如 email），目前沒有實作。
+
+## 內部人賣股新聞觀察分析
+
+`insider_selling_analysis.py` 是一個獨立、一次性的觀察分析，**沒有掛進每日排程**：
+
+- `news_filters.is_insider_selling()` 專門辨識「公司高管/董事賣自家股票」類標題（如
+  `CEO Sells 73,016 Shares`），跟 `is_routine_institutional_filing`（法人 13F 持股異動）是不同
+  類別、目前故意不過濾，讓它正常進入情緒分類流程。
+- 這類新聞提到的公司通常不是查詢用的 ticker（AAPL/NVDA/AMD/TSM/QCOM）本身，而是 Alpha Vantage
+  廣泛市場新聞裡剛好提到的其他公司，所以**不是**「該公司內部人賣股 → 該公司股價」的因果分析，而是
+  把「內部人賣股新聞」當一種市場情緒雜訊指標，觀察它跟 **AAPL** 股價後續表現的關係——選 AAPL 是
+  因為它有完整一年股價歷史，能避開台股跨市場對齊目前新聞覆蓋率太低（~2 週）的樣本量限制。
+- 目前結果（2,669 則新聞中抓到 35 則，對應 14 個交易日）：方向上「有內部人賣股新聞的日子，後續
+  1/3/5 日報酬都偏負」，但樣本數只有 9-14 個交易日，p-value 全部 > 0.05，**統計上不顯著，純觀察，
+  還看不出可靠關聯**。結果存在 `data/processed/insider_selling_news_AAPL.csv`（逐則）跟
+  `insider_selling_daily_AAPL.csv`（逐日聚合），不進 git。
+- 用法：`python src/technical_analysis/insider_selling_analysis.py`
+
 ## 之後要擴充的話，大概要改哪些地方
 
 **多支股票：**
@@ -277,6 +344,7 @@ Unregister-ScheduledTask -TaskName "StockNLP_DailyPipeline" -Confirm:$false
 - `signals.py` 目前的門檻（`sentiment_threshold` / `rsi_oversold` / `rsi_overbought`）是寫死的預設值，
   之後如果要做參數優化/掃描，建議另外寫一支腳本跑網格搜尋，不要直接改這支腳本的預設值（保持它是
   「目前正式設定」的單一事實來源）。
-- `train.py` 目前用固定的 `--max-train-samples` / `--max-eval-samples` 控制訓練資料量，是為了在
-  CPU/GPU 上快速跑通流程；要提升模型品質可以拿掉這個上限（用滿整個資料集）、增加 epoch，或改用
-  更貼近正式新聞語氣的訓練資料集。
+- `train.py` 預設已經是用滿整個資料集 + 6 epoch 的正式訓練版本（`--max-train-samples` /
+  `--max-eval-samples` 只是拿來快速跑通流程用的除錯選項，不是預設行為）。要再提升模型品質，
+  下一步是換一個更貼近正式新聞語氣（不是推文）的訓練資料集，這是目前最大的效能瓶頸，不是
+  樣本數或 epoch 的問題（見「已知限制」）。
