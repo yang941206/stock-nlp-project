@@ -19,6 +19,7 @@ from dotenv import load_dotenv
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PROCESSED_DIR = PROJECT_ROOT / "data" / "processed"
 NEWS_DIR = PROJECT_ROOT / "data" / "news"
+STATUS_PATH = PROJECT_ROOT / "logs" / "last_run_status.json"
 
 
 def parse_args() -> argparse.Namespace:
@@ -107,6 +108,23 @@ def build_ticker_block(ticker: str, args: argparse.Namespace) -> list:
     return lines
 
 
+def build_health_warning() -> str:
+    """讀 run_daily_pipeline.ps1 寫的健檢狀態檔，有失敗步驟/資料沒更新就組一段警告文字。"""
+    status = load_json(STATUS_PATH, {})
+    failed_steps = status.get("failed_steps", [])
+    stale_tickers = status.get("stale_tickers", [])
+    if not failed_steps and not stale_tickers:
+        return ""
+
+    lines = ["🔴 今天執行有異常，以下資料可能不完整/不是最新："]
+    if failed_steps:
+        lines.append(f"　失敗步驟（{len(failed_steps)}）: " + "、".join(failed_steps))
+    if stale_tickers:
+        lines.append(f"　資料未更新（{len(stale_tickers)}）: " + "、".join(stale_tickers))
+    lines.append("　詳見 logs\\daily_pipeline.log\n")
+    return "\n".join(lines)
+
+
 def build_message(args: argparse.Namespace) -> str:
     lines = build_shared_header(args)
     for ticker in args.tickers:
@@ -136,7 +154,7 @@ def main() -> None:
         raise RuntimeError("TELEGRAM_CHAT_ID 未設定，請先在 .env 填入。")
 
     header = f"📅 stock-nlp-project 每日報告 — {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')}\n\n"
-    message = header + build_message(args)
+    message = header + build_health_warning() + build_message(args)
 
     send_telegram_message(message, token, chat_id)
     print("Telegram 訊息已送出:")

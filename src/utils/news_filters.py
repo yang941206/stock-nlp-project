@@ -26,3 +26,24 @@ def is_routine_institutional_filing(title: str) -> bool:
     if not isinstance(title, str):
         return False
     return bool(ROUTINE_INSTITUTIONAL_FILING_PATTERN.search(title))
+
+
+# 內部人/高管申報賣股（Form 4 衍生的新聞標題），跟上面的機構（法人）持股異動是不同類別：
+# 這裡是公司自己的高管/董事賣「自家公司」股票，訊號意義不同，故意不過濾掉、單獨拉出來看
+# （見 insider_selling_analysis.py）。只抓「有明確賣出動作」的標題，不含方向不明的
+# 「Form 4 XXX For: ... By Investing.com」原始申報通知（無法判斷買賣方向）。
+INSIDER_TITLE_WORDS = (
+    r"CEO|CFO|COO|CTO|President|Chairman|Chairwoman|Director|SVP|EVP|VP"
+    r"|Officer|Insider|Founder|Owner"
+)
+INSIDER_SELLING_PATTERN = re.compile(
+    rf"\bInsider\s+(?:Sale|Sell)(?:s|ing)?\b"
+    rf"|\b(?:{INSIDER_TITLE_WORDS})\b[^?!]{{0,80}}\b(?:Sale|Sell)(?:s|ing)?\b[^?!]{{0,60}}\b(?:Shares?|Stock)\b",
+    re.IGNORECASE,
+)
+
+
+def is_insider_selling(title: str) -> bool:
+    if not isinstance(title, str):
+        return False
+    return bool(INSIDER_SELLING_PATTERN.search(title))

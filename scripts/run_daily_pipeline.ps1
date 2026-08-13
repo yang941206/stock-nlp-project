@@ -6,6 +6,12 @@
 $ErrorActionPreference = "Continue"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
+# 排程用 cmd /c 執行 python 時，子行程的 stdout/stderr 預設用系統 ANSI codepage（cp950），
+# print() 裡的 emoji（📅📰🔑...）會直接讓 python 崩潰、噴 UnicodeEncodeError（exit code 非 0）。
+# 統一在這裡設一次 PYTHONIOENCODING，所有透過 Run-Step 呼叫的 python 子行程都會繼承到，
+# 不用每支腳本各自修。這也是為什麼之前 telegram_notify.py 訊息明明送出去了、log 裡卻有
+# 一段 traceback的原因——訊息在 print() 之前就送出了，只是印確認訊息時才崩潰。
+$env:PYTHONIOENCODING = "utf-8"
 
 $ProjectRoot = "C:\Users\WWW\stock-nlp-project"
 $LogFile = Join-Path $ProjectRoot "logs\daily_pipeline.log"
@@ -26,11 +32,19 @@ function Write-Log {
     $Message | Out-File -FilePath $LogFile -Append -Encoding utf8
 }
 
+# 健檢用：累積這次執行裡失敗的步驟，跑完後寫進 logs/last_run_status.json，
+# telegram_notify.py 會讀這個檔案，有失敗就在通知開頭加警告，不會再悄悄跑完卻沒人知道。
+$script:FailedSteps = @()
+
 function Run-Step {
     param([string]$Label, [string]$ScriptPath, [string[]]$ScriptArgs)
     Write-Log "--- $Label ---"
     $quotedArgs = ($ScriptArgs | ForEach-Object { "`"$_`"" }) -join ' '
     cmd /c "`"$Python`" `"$ScriptPath`" $quotedArgs >> `"$LogFile`" 2>&1"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Log "!!! FAILED: $Label (exit code $LASTEXITCODE) !!!"
+        $script:FailedSteps += $Label
+    }
 }
 
 $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
@@ -52,6 +66,35 @@ foreach ($tw in $TwTickers) {
     Run-Step "signals.py ($tw)" "$Src\technical_analysis\signals.py" @("--ticker", $label)
     Run-Step "correlation_analysis.py ($tw)" "$Src\technical_analysis\correlation_analysis.py" @("--ticker", $label)
 }
+
+# 健檢：就算所有步驟都「沒噴例外」，也可能是某一步靜默用了舊檔案（例如今天的 merge 沒有
+# 真的重新產生 signals.csv，下游步驟直接讀到昨天留下的舊檔，全部正常跑完但資料是舊的）。
+# 所以額外檢查每支台股的 signals.csv 是不是今天才被寫入。
+$staleTickers = @()
+$today = Get-Date -Format "yyyy-MM-dd"
+foreach ($tw in $TwTickers) {
+    $label = "${tw}_x_US"
+    $signalsPath = Join-Path $ProjectRoot "data\processed\${label}_signals.csv"
+    if (-not (Test-Path $signalsPath)) {
+        $staleTickers += "$tw (檔案不存在)"
+    } elseif ((Get-Item $signalsPath).LastWriteTime.ToString('yyyy-MM-dd') -ne $today) {
+        $staleTickers += "$tw (今天沒有更新，可能還是舊資料)"
+    }
+}
+
+if ($script:FailedSteps.Count -gt 0) {
+    Write-Log "!!! HEALTH CHECK: 這次執行有 $($script:FailedSteps.Count) 個步驟失敗 !!!"
+}
+if ($staleTickers.Count -gt 0) {
+    Write-Log "!!! HEALTH CHECK: $($staleTickers.Count) 支台股的資料今天沒有真的更新: $($staleTickers -join '; ') !!!"
+}
+
+$statusPath = Join-Path $ProjectRoot "logs\last_run_status.json"
+@{
+    run_timestamp = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
+    failed_steps  = $script:FailedSteps
+    stale_tickers = $staleTickers
+} | ConvertTo-Json | Out-File -FilePath $statusPath -Encoding utf8
 
 Run-Step "telegram_notify.py" "$Src\utils\telegram_notify.py" @("--tickers", $TwTickers, "--news-tickers", $NewsTickers)
 
