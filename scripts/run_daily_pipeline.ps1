@@ -79,6 +79,10 @@ if ($LASTEXITCODE -ne 0) {
         & $Git push $pushUrl main *>> $LogFile
         if ($LASTEXITCODE -ne 0) {
             Write-Log "WARNING: git push 失敗 (exit code $LASTEXITCODE)，GitHub 上的資料未更新，Streamlit Cloud 會顯示舊資料，請手動檢查（可能是 PAT 過期/被撤銷）。"
+        } else {
+            # push 用明確網址而不是具名 origin，不會自動更新本機的 origin/main 追蹤參照，
+            # 手動同步一下，避免 git status 一直誤報「ahead of origin」
+            & $Git update-ref refs/remotes/origin/main (& $Git rev-parse HEAD)
         }
     }
 } else {
