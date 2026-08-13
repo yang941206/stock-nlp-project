@@ -1,0 +1,39 @@
+# Virtual environment
+venv/
+.venv/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Env vars / secrets
+.env
+
+# Data (large / generated)
+data/raw/*
+data/processed/*
+data/news/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/news/.gitkeep
+
+# Model checkpoints
+models/*
+!models/.gitkeep
+
+# Notebooks checkpoints
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+.claude/
+
+# Logs
+logs/*.log

@@ -1,0 +1,27 @@
+# Data collection
+yfinance>=0.2.40
+pandas>=2.2.0
+numpy>=1.26.0
+requests>=2.31.0
+
+# NLP / sentiment model fine-tuning
+# NOTE: `pip install -r requirements.txt` installs the CPU-only torch build.
+# For GPU (NVIDIA, CUDA-capable) training, instead run:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu128
+# before installing the rest of this file (adjust cuXXX to match your GPU/driver).
+transformers>=4.44.0
+datasets>=2.20.0
+torch>=2.3.0
+accelerate>=0.33.0
+scikit-learn>=1.5.0
+sentencepiece>=0.2.0
+
+# Technical analysis (future step)
+ta>=0.11.0
+
+# Utilities
+python-dotenv>=1.0.0
+tqdm>=4.66.0
+
+# Dev / notebooks
+jupyter>=1.0.0

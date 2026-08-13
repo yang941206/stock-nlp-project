@@ -1,0 +1,19 @@
+# Basic packages for now (data collection / processing / utilities)
+# Heavy ML fine-tuning packages (transformers, torch, datasets, accelerate)
+# are listed in requirements.txt and should be installed later when
+# starting the sentiment model fine-tuning stage.
+
+yfinance>=0.2.40
+pandas>=2.2.0
+numpy>=1.26.0
+requests>=2.31.0
+scikit-learn>=1.5.0
+scipy>=1.13.0
+ta>=0.11.0
+python-dotenv>=1.0.0
+tqdm>=4.66.0
+jupyter>=1.0.0
+
+# Dashboard
+streamlit>=1.38.0
+plotly>=5.24.0
