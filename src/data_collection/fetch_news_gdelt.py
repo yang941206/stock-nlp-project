@@ -136,7 +136,9 @@ def merge_into_news_csv(ticker: str, new_rows: list) -> int:
         combined = new_df
 
     combined = combined.drop_duplicates(subset=["url"], keep="first")
-    combined["pub_date"] = pd.to_datetime(combined["pub_date"], utc=True)
+    # format="ISO8601"：既有資料存回 CSV 後會變成 "YYYY-MM-DD HH:MM:SS+00:00"，這次新抓到的
+    # 是 "YYYY-MM-DDTHH:MM:SSZ"，同一欄兩種格式混在一起，不指定 format 會直接 crash（已實測重現）。
+    combined["pub_date"] = pd.to_datetime(combined["pub_date"], utc=True, format="ISO8601")
     combined = combined.sort_values("pub_date").reset_index(drop=True)
     combined.to_csv(output_path, index=False, encoding="utf-8-sig")
 
