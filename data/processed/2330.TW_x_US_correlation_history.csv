@@ -1,0 +1,2 @@
+﻿run_timestamp,forward_days,n_samples,pearson_r,pearson_p,spearman_rho,spearman_p,date_range_start,date_range_end
+2026-08-13T00:30:51Z,1,13,-0.4386,0.1338,-0.3407,0.2547,2026-07-23,2026-08-10

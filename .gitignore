@@ -19,6 +19,11 @@ data/news/*
 !data/processed/.gitkeep
 !data/news/.gitkeep
 
+# ...except the processed files app.py (Streamlit dashboard) actually reads
+!data/processed/*_features.csv
+!data/processed/*_merged_sentiment.csv
+!data/processed/*_correlation_history.csv
+
 # Model checkpoints
 models/*
 !models/.gitkeep
