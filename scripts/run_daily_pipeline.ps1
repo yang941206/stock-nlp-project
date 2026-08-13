@@ -57,8 +57,9 @@ Run-Step "telegram_notify.py" "$Src\utils\telegram_notify.py" @("--tickers", $Tw
 
 # 把最新的 dashboard 資料 (data/processed 底下沒被 .gitignore 排除的檔案) commit + push 回
 # GitHub，讓 Streamlit Cloud 上的版本隔天能抓到當天資料。只 add data/processed，不會動到
-# 其他還沒 commit 的程式碼變更。用快取在 Windows Credential Manager 的憑證非互動推送，
-# 如果憑證過期/沒快取，push 會直接失敗（GIT_TERMINAL_PROMPT=0 不會卡住等輸入）並記錄警告。
+# 其他還沒 commit 的程式碼變更。用 .env 裡的 GITHUB_PAT（GitHub Personal Access Token）非
+# 互動推送，不依賴 Windows 登入 session 或瀏覽器 OAuth，排程無人值守也能跑。PAT 只在這次
+# push 指令的 URL 參數裡用一下，不會寫進 .git/config（git remote -v 看到的還是乾淨的網址）。
 Write-Log "--- git commit + push (data/processed) ---"
 $Git = "C:\Program Files\Git\cmd\git.exe"
 $env:GIT_TERMINAL_PROMPT = "0"
@@ -68,9 +69,17 @@ $env:GIT_TERMINAL_PROMPT = "0"
 if ($LASTEXITCODE -ne 0) {
     $commitMsg = "Daily data update $(Get-Date -Format 'yyyy-MM-dd')"
     & $Git commit -m $commitMsg *>> $LogFile
-    & $Git push *>> $LogFile
-    if ($LASTEXITCODE -ne 0) {
-        Write-Log "WARNING: git push 失敗 (exit code $LASTEXITCODE)，GitHub 上的資料未更新，Streamlit Cloud 會顯示舊資料，請手動檢查。"
+
+    $envLine = Get-Content (Join-Path $ProjectRoot ".env") | Where-Object { $_ -match '^GITHUB_PAT=' }
+    $githubPat = ($envLine -replace '^GITHUB_PAT=', '').Trim()
+    if (-not $githubPat) {
+        Write-Log "WARNING: .env 裡沒有 GITHUB_PAT，無法自動 push，請手動 push 或補上 token。"
+    } else {
+        $pushUrl = "https://$githubPat@github.com/yang941206/stock-nlp-project.git"
+        & $Git push $pushUrl main *>> $LogFile
+        if ($LASTEXITCODE -ne 0) {
+            Write-Log "WARNING: git push 失敗 (exit code $LASTEXITCODE)，GitHub 上的資料未更新，Streamlit Cloud 會顯示舊資料，請手動檢查（可能是 PAT 過期/被撤銷）。"
+        }
     }
 } else {
     Write-Log "No data changes to commit."
