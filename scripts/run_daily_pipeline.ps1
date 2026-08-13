@@ -50,4 +50,25 @@ foreach ($tw in $TwTickers) {
 
 Run-Step "telegram_notify.py" "$Src\utils\telegram_notify.py" @("--tickers", $TwTickers, "--news-tickers", "AAPL", "NVDA")
 
+# 把最新的 dashboard 資料 (data/processed 底下沒被 .gitignore 排除的檔案) commit + push 回
+# GitHub，讓 Streamlit Cloud 上的版本隔天能抓到當天資料。只 add data/processed，不會動到
+# 其他還沒 commit 的程式碼變更。用快取在 Windows Credential Manager 的憑證非互動推送，
+# 如果憑證過期/沒快取，push 會直接失敗（GIT_TERMINAL_PROMPT=0 不會卡住等輸入）並記錄警告。
+Write-Log "--- git commit + push (data/processed) ---"
+$Git = "C:\Program Files\Git\cmd\git.exe"
+$env:GIT_TERMINAL_PROMPT = "0"
+
+& $Git add data/processed *>> $LogFile
+& $Git diff --cached --quiet
+if ($LASTEXITCODE -ne 0) {
+    $commitMsg = "Daily data update $(Get-Date -Format 'yyyy-MM-dd')"
+    & $Git commit -m $commitMsg *>> $LogFile
+    & $Git push *>> $LogFile
+    if ($LASTEXITCODE -ne 0) {
+        Write-Log "WARNING: git push 失敗 (exit code $LASTEXITCODE)，GitHub 上的資料未更新，Streamlit Cloud 會顯示舊資料，請手動檢查。"
+    }
+} else {
+    Write-Log "No data changes to commit."
+}
+
 Write-Log "===== Finished at $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ====="
