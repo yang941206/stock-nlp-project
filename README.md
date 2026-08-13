@@ -81,15 +81,15 @@ models/finbert-sentiment/final/
 ```
 
 還有一條**實驗性的跨市場流程**（已排進每日排程，見下方「排程狀態」）：把美股新聞情緒對齊到台股
-下一個交易日，觀察有沒有領先/落後的關聯性。跟上面主流程的差異是新聞股票（AAPL/NVDA）跟股價股票
-不是同一支。新聞只抓一次，**多支台股共用同一份 AAPL/NVDA 新聞**（目前是 2330.TW、0050.TW、
+下一個交易日，觀察有沒有領先/落後的關聯性。跟上面主流程的差異是新聞股票（AAPL/NVDA/AMD/TSM/QCOM）
+跟股價股票不是同一支。新聞只抓一次，**多支台股共用同一份美股新聞**（目前是 2330.TW、0050.TW、
 2317.TW、2454.TW 這 4 支，見下方「排程狀態」）：
 
 ```
-                                         fetch_news_alphavantage.py (AAPL / NVDA)
+                                    fetch_news_alphavantage.py (AAPL/NVDA/AMD/TSM/QCOM)
                                                          │  （只抓一次，4 支台股共用）
                                                          ▼
-                                         data/news/{AAPL,NVDA}_news.csv
+                              data/news/{AAPL,NVDA,AMD,TSM,QCOM}_news.csv
                                                          │
 for each 台股 ticker (2330.TW / 0050.TW / 2317.TW / 2454.TW):
                     │
@@ -99,7 +99,7 @@ for each 台股 ticker (2330.TW / 0050.TW / 2317.TW / 2454.TW):
         data/raw/{ticker}_*.csv                 對齊到「新聞發布後下一個台股交易日」，並跑情緒分類）
                     │                                        │
                     ▼                                        ▼
-               indicators.py              data/processed/{ticker}_news_from_AAPL_NVDA.csv
+               indicators.py              data/processed/{ticker}_news_from_AAPL_NVDA_AMD_TSM_QCOM.csv
                     │                                        │
                     ▼                                        │
 data/processed/{ticker}_indicators.csv                       │
@@ -210,23 +210,25 @@ Windows 工作排程器已設定每天自動執行**完整的跨市場實驗流�
 | 任務名稱 | `StockNLP_DailyPipeline` |
 | 執行時間 | 每天 08:30（本機時間） |
 | 執行內容 | `scripts\run_daily_pipeline.ps1`，依序執行： |
-| | 1. `fetch_news_alphavantage.py --ticker AAPL --max-requests 10`（只抓一次，4 支台股共用） |
-| | 2. `fetch_news_alphavantage.py --ticker NVDA --max-requests 10` |
-| | 3. 對 `2330.TW`、`0050.TW`、`2317.TW`、`2454.TW` 各自依序跑： |
+| | 1. 對 `AAPL`、`NVDA`、`AMD`、`TSM`、`QCOM` 各自跑一次 `fetch_news_alphavantage.py --ticker {該股} --max-requests 4`（只抓一次，4 支台股共用） |
+| | 2. 對 `2330.TW`、`0050.TW`、`2317.TW`、`2454.TW` 各自依序跑： |
 | | &nbsp;&nbsp;a. `fetch_stock_price.py --ticker {該台股} --period 1y` |
-| | &nbsp;&nbsp;b. `merge_cross_market_news.py --price-ticker {該台股} --news-tickers AAPL NVDA` |
+| | &nbsp;&nbsp;b. `merge_cross_market_news.py --price-ticker {該台股} --news-tickers AAPL NVDA AMD TSM QCOM` |
 | | &nbsp;&nbsp;c. `indicators.py --ticker {該台股}` |
 | | &nbsp;&nbsp;d. `prepare_crossmarket_adapter.py`（合成標籤 `{該台股}_x_US`） |
 | | &nbsp;&nbsp;e. `build_feature_table.py` → `signals.py` → `correlation_analysis.py`（append 進各自的歷史記錄） |
-| | 4. `telegram_notify.py --tickers 2330.TW 0050.TW 2317.TW 2454.TW`（每支台股一個小段落，發一則訊息） |
+| | 3. `telegram_notify.py --tickers 2330.TW 0050.TW 2317.TW 2454.TW`（每支台股一個小段落，發一則訊息） |
+| | 4. `git add data/processed` + commit + push（有變化才 commit），讓 Streamlit Cloud 版本隔天能抓到當天資料 |
 | 執行紀錄 | `logs\daily_pipeline.log`（累加寫入，UTF-8） |
 | 歷史記錄 | 每支台股各自的 `data\processed\{ticker}_x_US_correlation_history.csv`——每次執行 append 一筆
 （run_timestamp、樣本數、Pearson/Spearman 相關係數與 p-value），可以定期回來看樣本數有沒有增加、
 相關係數有沒有穩定下來 |
-| 額度分配 | AAPL / NVDA 各自最多 10 次請求（總共最多 20 次，留 5 次緩衝給手動測試）。這個額度是
-「抓新聞」這一步專屬的，4 支台股**共用同一份**抓回來的 AAPL/NVDA 新聞，不會因為台股變多而分食
-更多額度——加台股基本上不影響額度用量，只會多花一點點本地運算時間（跑情緒推論 + 指標計算）。
-Alpha Vantage 免費方案每天 25 次上限是**帳號共用**的 |
+| 新聞來源 | `AAPL`、`NVDA`（原本就有的兩家）+ `AMD`、`TSM`（台積電 ADR）、`QCOM`（新增的半導體
+供應鏈相關公司），共 5 支，每支最多 4 次請求（總共最多 20 次，留 5 次緩衝給手動測試，原本
+AAPL/NVDA 各 10 次，因為加了 3 支新來源所以調降，回溯歷史的速度會變慢）。這個額度是「抓新聞」這
+一步專屬的，4 支台股**共用同一份**抓回來的新聞，不會因為台股變多而分食更多額度——加台股基本上
+不影響額度用量，只會多花一點點本地運算時間（跑情緒推論 + 指標計算）。Alpha Vantage 免費方案每天
+25 次上限是**帳號共用**的 |
 | 通知 | Telegram Bot `@Stock_observer_bot`，Token/Chat ID 存在 `.env`（`TELEGRAM_BOT_TOKEN` /
 `TELEGRAM_CHAT_ID`） |
 | 限制 | 只有使用者登入時才會執行（沒有存密碼設定「無人登入也執行」）；用 `-StartWhenAvailable`，

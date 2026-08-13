@@ -1,5 +1,5 @@
 # Wrapper script for Windows Task Scheduler.
-# 每天自動跑完整條流程: 抓股價 -> 抓新聞(AAPL/NVDA，只抓一次，4 支台股共用)
+# 每天自動跑完整條流程: 抓股價 -> 抓新聞(AAPL/NVDA/AMD/TSM/QCOM，只抓一次，4 支台股共用)
 # -> 對每支台股: 跨市場對齊+情緒分類 -> 技術指標 -> 合併成 feature table -> 訊號 -> 相關係數分析
 # -> 發送 Telegram 摘要
 
@@ -13,7 +13,11 @@ $Python = Join-Path $ProjectRoot "venv\Scripts\python.exe"
 $Src = Join-Path $ProjectRoot "src"
 
 $TwTickers = @("2330.TW", "0050.TW", "2317.TW", "2454.TW")
-$NewsTickers = @("AAPL", "NVDA")
+# 半導體供應鏈相關新聞來源，4 支台股共用。5 支 x 4 次 = 20 次/天，在 Alpha Vantage
+# 免費方案 25 次/天上限內留 5 次緩衝給手動測試（原本 AAPL/NVDA 各 10 次，因為加了
+# 3 支新來源所以調降，AAPL/NVDA 的歷史回溯速度會因此變慢）。
+$NewsTickers = @("AAPL", "NVDA", "AMD", "TSM", "QCOM")
+$NewsMaxRequestsPerTicker = 4
 
 Set-Location $ProjectRoot
 
@@ -32,23 +36,24 @@ function Run-Step {
 $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
 Write-Log "`n===== Run at $timestamp ====="
 
-# 新聞只抓一次，AAPL/NVDA，4 支台股共用同一份新聞
-Run-Step "fetch_news_alphavantage.py (AAPL)" "$Src\data_collection\fetch_news_alphavantage.py" @("--ticker", "AAPL", "--max-requests", "10")
-Run-Step "fetch_news_alphavantage.py (NVDA)" "$Src\data_collection\fetch_news_alphavantage.py" @("--ticker", "NVDA", "--max-requests", "10")
+# 新聞只抓一次，4 支台股共用同一份新聞
+foreach ($newsTicker in $NewsTickers) {
+    Run-Step "fetch_news_alphavantage.py ($newsTicker)" "$Src\data_collection\fetch_news_alphavantage.py" @("--ticker", $newsTicker, "--max-requests", $NewsMaxRequestsPerTicker)
+}
 
 foreach ($tw in $TwTickers) {
     $label = "${tw}_x_US"
     Write-Log "===== $tw ====="
     Run-Step "fetch_stock_price.py ($tw)" "$Src\data_collection\fetch_stock_price.py" @("--ticker", $tw, "--period", "1y")
-    Run-Step "merge_cross_market_news.py ($tw)" "$Src\utils\merge_cross_market_news.py" @("--price-ticker", $tw, "--news-tickers", "AAPL", "NVDA")
+    Run-Step "merge_cross_market_news.py ($tw)" "$Src\utils\merge_cross_market_news.py" @("--price-ticker", $tw, "--news-tickers", $NewsTickers)
     Run-Step "indicators.py ($tw)" "$Src\technical_analysis\indicators.py" @("--ticker", $tw)
-    Run-Step "prepare_crossmarket_adapter.py ($tw)" "$Src\utils\prepare_crossmarket_adapter.py" @("--price-ticker", $tw, "--news-tickers", "AAPL", "NVDA", "--label", $label)
+    Run-Step "prepare_crossmarket_adapter.py ($tw)" "$Src\utils\prepare_crossmarket_adapter.py" @("--price-ticker", $tw, "--news-tickers", $NewsTickers, "--label", $label)
     Run-Step "build_feature_table.py ($tw)" "$Src\technical_analysis\build_feature_table.py" @("--ticker", $label)
     Run-Step "signals.py ($tw)" "$Src\technical_analysis\signals.py" @("--ticker", $label)
     Run-Step "correlation_analysis.py ($tw)" "$Src\technical_analysis\correlation_analysis.py" @("--ticker", $label)
 }
 
-Run-Step "telegram_notify.py" "$Src\utils\telegram_notify.py" @("--tickers", $TwTickers, "--news-tickers", "AAPL", "NVDA")
+Run-Step "telegram_notify.py" "$Src\utils\telegram_notify.py" @("--tickers", $TwTickers, "--news-tickers", $NewsTickers)
 
 # 把最新的 dashboard 資料 (data/processed 底下沒被 .gitignore 排除的檔案) commit + push 回
 # GitHub，讓 Streamlit Cloud 上的版本隔天能抓到當天資料。只 add data/processed，不會動到
