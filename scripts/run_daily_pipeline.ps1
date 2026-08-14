@@ -1,4 +1,4 @@
-# Wrapper script for Windows Task Scheduler.
+﻿# Wrapper script for Windows Task Scheduler.
 # 每天自動跑完整條流程: 抓股價 -> 抓新聞(AAPL/NVDA/AMD/TSM/QCOM，只抓一次，4 支台股共用)
 # -> 對每支台股: 跨市場對齊+情緒分類 -> 技術指標 -> 合併成 feature table -> 訊號 -> 相關係數分析
 # -> 發送 Telegram 摘要
@@ -59,9 +59,9 @@ foreach ($tw in $TwTickers) {
     $label = "${tw}_x_US"
     Write-Log "===== $tw ====="
     Run-Step "fetch_stock_price.py ($tw)" "$Src\data_collection\fetch_stock_price.py" @("--ticker", $tw, "--period", "1y")
-    Run-Step "merge_cross_market_news.py ($tw)" "$Src\utils\merge_cross_market_news.py" @("--price-ticker", $tw, "--news-tickers", $NewsTickers)
+    Run-Step "merge_cross_market_news.py ($tw)" "$Src\utils\merge_cross_market_news.py" (@("--price-ticker", $tw, "--news-tickers") + $NewsTickers)
     Run-Step "indicators.py ($tw)" "$Src\technical_analysis\indicators.py" @("--ticker", $tw)
-    Run-Step "prepare_crossmarket_adapter.py ($tw)" "$Src\utils\prepare_crossmarket_adapter.py" @("--price-ticker", $tw, "--news-tickers", $NewsTickers, "--label", $label)
+    Run-Step "prepare_crossmarket_adapter.py ($tw)" "$Src\utils\prepare_crossmarket_adapter.py" (@("--price-ticker", $tw, "--news-tickers") + $NewsTickers + @("--label", $label))
     Run-Step "build_feature_table.py ($tw)" "$Src\technical_analysis\build_feature_table.py" @("--ticker", $label)
     Run-Step "signals.py ($tw)" "$Src\technical_analysis\signals.py" @("--ticker", $label)
     Run-Step "correlation_analysis.py ($tw)" "$Src\technical_analysis\correlation_analysis.py" @("--ticker", $label)
@@ -96,7 +96,7 @@ $statusPath = Join-Path $ProjectRoot "logs\last_run_status.json"
     stale_tickers = $staleTickers
 } | ConvertTo-Json | Out-File -FilePath $statusPath -Encoding utf8
 
-Run-Step "telegram_notify.py" "$Src\utils\telegram_notify.py" @("--tickers", $TwTickers, "--news-tickers", $NewsTickers)
+Run-Step "telegram_notify.py" "$Src\utils\telegram_notify.py" (@("--tickers") + $TwTickers + @("--news-tickers") + $NewsTickers)
 
 # 把最新的 dashboard 資料 (data/processed 底下沒被 .gitignore 排除的檔案) commit + push 回
 # GitHub，讓 Streamlit Cloud 上的版本隔天能抓到當天資料。只 add data/processed，不會動到
@@ -107,11 +107,13 @@ Write-Log "--- git commit + push (data/processed) ---"
 $Git = "C:\Program Files\Git\cmd\git.exe"
 $env:GIT_TERMINAL_PROMPT = "0"
 
-& $Git add data/processed *>> $LogFile
+    # 用 cmd /c 導向（跟 Run-Step 一樣），不要用 PowerShell 原生的 *>> ── 那個預設會用
+    # UTF-16 寫進 log，跟這份 log 檔其他地方的 UTF-8 混在一起會變亂碼（已實測重現）。
+& cmd /c "`"$Git`" add data/processed >> `"$LogFile`" 2>&1"
 & $Git diff --cached --quiet
 if ($LASTEXITCODE -ne 0) {
     $commitMsg = "Daily data update $(Get-Date -Format 'yyyy-MM-dd')"
-    & $Git commit -m $commitMsg *>> $LogFile
+    & cmd /c "`"$Git`" commit -m `"$commitMsg`" >> `"$LogFile`" 2>&1"
 
     $envLine = Get-Content (Join-Path $ProjectRoot ".env") | Where-Object { $_ -match '^GITHUB_PAT=' }
     $githubPat = ($envLine -replace '^GITHUB_PAT=', '').Trim()
@@ -119,7 +121,7 @@ if ($LASTEXITCODE -ne 0) {
         Write-Log "WARNING: .env 裡沒有 GITHUB_PAT，無法自動 push，請手動 push 或補上 token。"
     } else {
         $pushUrl = "https://$githubPat@github.com/yang941206/stock-nlp-project.git"
-        & $Git push $pushUrl main *>> $LogFile
+        & cmd /c "`"$Git`" push `"$pushUrl`" main >> `"$LogFile`" 2>&1"
         if ($LASTEXITCODE -ne 0) {
             Write-Log "WARNING: git push 失敗 (exit code $LASTEXITCODE)，GitHub 上的資料未更新，Streamlit Cloud 會顯示舊資料，請手動檢查（可能是 PAT 過期/被撤銷）。"
         } else {

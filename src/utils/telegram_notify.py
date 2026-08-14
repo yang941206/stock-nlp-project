@@ -36,7 +36,9 @@ def parse_args() -> argparse.Namespace:
 
 def load_json(path: Path, default: dict) -> dict:
     if path.exists():
-        return json.loads(path.read_text(encoding="utf-8"))
+        # utf-8-sig：PowerShell 的 Out-File -Encoding utf8 會加 BOM，純 utf-8 讀取會在
+        # json.loads 直接噴 JSONDecodeError（已實測重現，last_run_status.json 就是這樣寫出來的）。
+        return json.loads(path.read_text(encoding="utf-8-sig"))
     return default
 
 
